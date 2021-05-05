@@ -4,6 +4,7 @@ import os
 import email
 import smtplib
 import ssl
+import csv
 
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -48,18 +49,18 @@ def load_dashboard(web):
 
 
 def process_report(web, filter_element):
-	
-	vendors = [v.strip() for v in get_config_value('report', 'vendors').split(',')]
+	vendors = get_vendors()
 	for vendor in vendors:
-		print(f"Reporte para {vendor}.")
+		print(f"Reporte para {vendor['Representante']}.")
+		vendor_filter_name = vendor['Representante'].strip().title()
 		filter_element.click()
 		try:
-			vendor_tag = WebDriverWait(web, DEFAULT_TIMEOUT).until(expected_conditions.element_to_be_clickable((By.XPATH, f"//span[@title='{vendor}']")))
+			vendor_tag = WebDriverWait(web, DEFAULT_TIMEOUT).until(expected_conditions.element_to_be_clickable((By.XPATH, f"//span[@title='{vendor_filter_name}']")))
 		except TimeoutException as e:
-			print(f"Error al cargar el elemento de filtro para el vendedor {vendor}.")
+			print(f"Error al cargar el elemento de filtro para el vendedor {vendor_filter_name}.")
 			raise e.__class__()
 
-		parent_tag = web.find_element_by_xpath(f"//span[@title='{vendor}']/ancestor::div[@class='slicerItemContainer']")
+		parent_tag = web.find_element_by_xpath(f"//span[@title='{vendor_filter_name}']/ancestor::div[@class='slicerItemContainer']")
 
 		if parent_tag.get_attribute('aria-selected') == 'true':
 			pass
@@ -68,11 +69,26 @@ def process_report(web, filter_element):
 
 		filter_element.click()
 		generate_report(web)
-		file_path = rename_report(vendor)
+		file_path = rename_report(vendor['Representante'])
 		send_email(vendor, file_path)
 		remove_report(file_path)
+		break
 
 	return web
+
+
+def get_vendors():
+	vendors = list()
+	vendors_file_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'vendors.csv')
+	try:
+		with open(vendors_file_path, 'r') as _f:
+			reader = csv.DictReader(_f, delimiter=';')
+			for v in reader:
+				vendors.append(v)
+	except Exception as e:
+		print('Error al leer archivo de vendedores.')
+		raise e.__class__()
+	return vendors
 
 
 def generate_report(web):
@@ -131,6 +147,7 @@ def start_browser():
 	#Config and open browser
 	browser_options = Options()
 	browser_options.add_argument('start-maximized')
+	browser_options.add_argument('--lang=es_PE')
 	web = webdriver.Chrome(WEBDRIVER_PATH, chrome_options=browser_options)
 	web.get(get_config_value('dashboard', 'url'))
 
@@ -155,7 +172,8 @@ def login(web):
 
 def get_config_value(section, key):
 	parser = configparser.ConfigParser()
-	parser.read('config.cfg')
+	file_config_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'config.cfg')
+	parser.read(file_config_path)
 	sections = parser.sections()
 
 	if not section in sections:
@@ -172,23 +190,30 @@ def get_download_folder():
 
 
 def send_email(vendor, file_path):
-	subject = f"Reporte: {vendor}"
+	subject = f"Reporte: {vendor['Representante']}"
 	body = ''
 	sender_email = get_config_value('email', 'sender')
-	receiver_email = get_config_value('receivers', get_vendor_file_name(vendor))
-	password = get_config_value('email', 'password')
+	receiver_email = 'agocht@gmail.com' #  vendor['Correo']
+	try:
+		password = get_config_value('email', 'password').replace('"', '')
+	except:
+		print('No password')
+		exit()
 
 	message = EmailMessage()
 	message['Subject'] = subject
 	message['From'] = sender_email
 	message['To'] = ', '.join([receiver_email])
+	message.set_content(body)
+	context = ssl.create_default_context()
 
 	with open(file_path, 'rb') as _f:
-		message.add_attachment(_f.read(), maintype='application', subtype='pdf', filename=vendor + '.pdf')
+		message.add_attachment(_f.read(), maintype='application', subtype='pdf', filename=vendor['Representante'] + '.pdf')
 	
 	try:
-		with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
+		with smtplib.SMTP('smtp.office365.com', 587) as server:
 			server.ehlo()
+			server.starttls(context=context)
 			server.login(sender_email, password)
 			server.ehlo()
 			server.send_message(message)
@@ -197,9 +222,8 @@ def send_email(vendor, file_path):
 		print('Error al enviar correo. Se elimina el archivo por seguridad.')
 		raise e.__class__()
 
-	print(f"Reporte enviado a {vendor}.")
+	print(f"Reporte enviado a {vendor['Representante']}.")
 
 
 if __name__ == '__main__':
-	print(get_config_value('report', 'vendors'))
-	browser = main()
+	main()
